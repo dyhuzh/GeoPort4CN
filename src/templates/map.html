@@ -233,6 +233,13 @@ body.dark-mode .modal-footer button {
     padding: 4px; /* Adjust padding as needed */
 }
 
+.cn-settings-row {
+    gap: 8px;
+}
+.cn-key-badge {
+    font-size: 0.75rem;
+}
+
     </style>
 </head>
 
@@ -282,6 +289,18 @@ body.dark-mode .modal-footer button {
           <input class="form-check-input" type="checkbox" role="switch" id="enableFuelPrices" onchange="toggleFuelTypeVisibility()">
             <label for="enableFuelPrices"> Fuel Mode</label>
     </div>
+</div>
+
+<!-- CN Mode toggle -->
+<div class="d-flex justify-content-md-end mt-2 container align-items-center cn-settings-row">
+    <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="cnModeSwitch" onchange="onCnModeToggle(this.checked)">
+        <label class="form-check-label" for="cnModeSwitch">🇨🇳 中国大陆模式</label>
+    </div>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#cnSettingsModal">
+        ⚙ 设置
+    </button>
+    <span id="cnKeyStatusBadge" class="cn-key-badge"></span>
 </div>
 
 
@@ -619,6 +638,106 @@ var timeToNextPoint = 'N/A';
 var velocitySelect = 'walk';
 let isDrawingMode = false; // Flag to track drawing mode
 
+// ===================== CN Mode =====================
+// Server-detected value (based on IP / locale at startup)
+var cnModeFromServer = {% if cn_mode %}true{% else %}false{% endif %};
+
+// Honour localStorage override if user has explicitly set it; otherwise use server value
+var cnMode = (localStorage.getItem('cn_mode') !== null)
+    ? localStorage.getItem('cn_mode') === 'true'
+    : cnModeFromServer;
+
+// Gaode API key: localStorage first, then server-persisted file (survives port changes / new browsers)
+var gaodeApiKey = localStorage.getItem('gaode_api_key') || {{ gaode_api_key | tojson }} || '';
+
+// Tile layer handles set during initializeMap, used by onCnModeToggle
+var layerControl = null;
+var _tileLayersSet = {};
+
+// ---- GCJ-02 (火星) → WGS-84 (GPS / iOS) conversion ----
+function _outOfChina(lng, lat) {
+    return !(73.66 < lng && lng < 135.05 && 3.86 < lat && lat < 53.55);
+}
+function _transformLat(lng, lat) {
+    var ret = -100.0 + 2.0*lng + 3.0*lat + 0.2*lat*lat + 0.1*lng*lat + 0.2*Math.sqrt(Math.abs(lng));
+    ret += (20.0*Math.sin(6.0*lng*Math.PI) + 20.0*Math.sin(2.0*lng*Math.PI)) * 2.0/3.0;
+    ret += (20.0*Math.sin(lat*Math.PI) + 40.0*Math.sin(lat/3.0*Math.PI)) * 2.0/3.0;
+    ret += (160.0*Math.sin(lat/12.0*Math.PI) + 320.0*Math.sin(lat*Math.PI/30.0)) * 2.0/3.0;
+    return ret;
+}
+function _transformLng(lng, lat) {
+    var ret = 300.0 + lng + 2.0*lat + 0.1*lng*lng + 0.1*lng*lat + 0.1*Math.sqrt(Math.abs(lng));
+    ret += (20.0*Math.sin(6.0*lng*Math.PI) + 20.0*Math.sin(2.0*lng*Math.PI)) * 2.0/3.0;
+    ret += (20.0*Math.sin(lng*Math.PI) + 40.0*Math.sin(lng/3.0*Math.PI)) * 2.0/3.0;
+    ret += (150.0*Math.sin(lng/12.0*Math.PI) + 300.0*Math.sin(lng/30.0*Math.PI)) * 2.0/3.0;
+    return ret;
+}
+function gcj02ToWgs84(lng, lat) {
+    if (_outOfChina(lng, lat)) return [lng, lat];
+    var a = 6378245.0, ee = 0.00669342162296594323;
+    var dlat = _transformLat(lng - 105.0, lat - 35.0);
+    var dlng = _transformLng(lng - 105.0, lat - 35.0);
+    var radlat = lat / 180.0 * Math.PI;
+    var magic = Math.sin(radlat);
+    magic = 1 - ee * magic * magic;
+    var sqrtmagic = Math.sqrt(magic);
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * Math.PI);
+    dlng = (dlng * 180.0) / (a / sqrtmagic * Math.cos(radlat) * Math.PI);
+    return [lng - dlng, lat - dlat];
+}
+
+// ---- CN mode UI helpers ----
+function updateCnKeyBadge() {
+    var badge = document.getElementById('cnKeyStatusBadge');
+    var modalStatus = document.getElementById('cnModalKeyStatus');
+    if (gaodeApiKey) {
+        if (badge) badge.innerHTML = '<span class="badge bg-success cn-key-badge">Key ✓</span>';
+        if (modalStatus) modalStatus.innerHTML = '<span class="badge bg-success">✓ API Key 已配置，地址搜索可用</span>';
+    } else {
+        if (badge) badge.innerHTML = cnMode ? '<span class="badge bg-warning text-dark cn-key-badge">未配置 Key</span>' : '';
+        if (modalStatus) modalStatus.innerHTML = '<span class="badge bg-warning text-dark">⚠ 未配置 API Key，地址搜索将不可用（地图点选仍正常）</span>';
+    }
+}
+
+function onCnModeToggle(value) {
+    localStorage.setItem('cn_mode', String(value));
+    // Persist to server-side settings file, then reload so all UI (map, geocoding, donation) updates
+    fetch('/save_settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cn_mode: value})
+    }).finally(function() { location.reload(); });
+}
+
+function toggleApiKeyVisibility() {
+    var input = document.getElementById('gaodeApiKeyInput');
+    var icon = document.getElementById('keyVisibilityIcon');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'fa fa-eye-slash';
+    } else {
+        input.type = 'password';
+        icon.className = 'fa fa-eye';
+    }
+}
+
+function saveCnSettings() {
+    var newKey = document.getElementById('gaodeApiKeyInput').value.trim();
+    gaodeApiKey = newKey;
+    localStorage.setItem('gaode_api_key', gaodeApiKey);
+    // Also save to ~/GeoPort/settings.json so the key survives port changes and new browsers
+    fetch('/save_settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({gaode_api_key: gaodeApiKey})
+    });
+    updateCnKeyBadge();
+    var modalEl = document.getElementById('cnSettingsModal');
+    var modal = bootstrap.Modal.getInstance(modalEl);
+    if (modal) modal.hide();
+}
+// ===================== CN Mode End =====================
+
 
 // Initialize the map
 async function initializeMap(userLocale) {
@@ -629,6 +748,20 @@ async function initializeMap(userLocale) {
     map = L.map('map', {
         keyboard: false // Disable keyboard navigation
     });
+
+    // Gaode tile layers — GCJ-02 坐标系，CN 模式专用
+    var gaodeNormal = L.tileLayer(
+        'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+        { subdomains: '1234', maxZoom: 19, attribution: '&copy; <a href="https://www.amap.com/" target="_blank">高德地图</a>' }
+    );
+    var gaodeSatellite = L.tileLayer(
+        'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+        { subdomains: '1234', maxZoom: 19, attribution: '&copy; <a href="https://www.amap.com/" target="_blank">高德地图</a>' }
+    );
+    var gaodeHybrid = L.tileLayer(
+        'https://webst0{s}.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}',
+        { subdomains: '1234', maxZoom: 19, attribution: '&copy; <a href="https://www.amap.com/" target="_blank">高德地图</a>' }
+    );
 
     // Create tile layers
     var stadiaTileLayer = L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
@@ -708,8 +841,12 @@ async function initializeMap(userLocale) {
         maxZoom: 20
     });
 
-    // Use searchLocation to get coordinates based on userLocale
-    await searchLocation(userLocale);
+    // Initial map center: CN mode → China; otherwise use locale-based geocoding
+    if (cnMode) {
+        map.setView([35.86, 104.20], 4);
+    } else {
+        await searchLocation(userLocale);
+    }
 
     map.on('dblclick', handleMapDoubleClick);
 
@@ -724,8 +861,8 @@ async function initializeMap(userLocale) {
     // }).addTo(map);
 
 
-    // Add default tile layer
-    stadiaTileLayer.addTo(map);
+    // Add default tile layer based on CN mode
+    (cnMode ? gaodeNormal : stadiaTileLayer).addTo(map);
 
     // Define tile layer control options
     var baseLayers = {
@@ -744,12 +881,26 @@ async function initializeMap(userLocale) {
         "Esri World Topo Map": Esri_WorldTopoMap,
         "Esri World Imagery": Esri_WorldImagery,
         "CartoDB Voyager": CartoDB_Voyager,
+    };
 
+    var cnBaseLayers = {
+        "高德地图": gaodeNormal,
+        "高德卫星图": gaodeSatellite,
+        "高德卫星+路网": gaodeHybrid,
+    };
 
+    // Store references so onCnModeToggle can rebuild the layer control
+    _tileLayersSet = {
+        stadiaTileLayer: stadiaTileLayer,
+        gaodeNormal: gaodeNormal,
+        gaodeSatellite: gaodeSatellite,
+        gaodeHybrid: gaodeHybrid,
+        cnBaseLayers: cnBaseLayers,
+        intlBaseLayers: baseLayers,
     };
 
     // Add layer control to map
-    L.control.layers(baseLayers).addTo(map);
+    layerControl = L.control.layers(cnMode ? cnBaseLayers : baseLayers).addTo(map);
 
 
 
@@ -1421,12 +1572,21 @@ function setCoordinates(lat, lng) {
     document.getElementById('coordinates').value = lat + ', ' + lng;
     updateSetLocationButtonStatus();
     updateStopLocationButtonStatus(); // Add this line to update the Stop Location button status
+
+    // CN mode: map uses GCJ-02, iOS requires WGS-84 — convert before sending
+    var sendLat = lat, sendLng = lng;
+    if (cnMode) {
+        var wgs = gcj02ToWgs84(lng, lat);
+        sendLng = wgs[0];
+        sendLat = wgs[1];
+    }
+
     fetch('/update_location', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ lat, lng }),
+        body: JSON.stringify({ lat: sendLat, lng: sendLng }),
     })
         .then(response => response.text())
         .then(data => console.log(data))
@@ -1441,7 +1601,38 @@ function handleSearch() {
 
 // Function to search location
 async function searchLocation(input, userLocale) {
-    // Initialize the OSM provider for searching
+    if (!input) return;
+
+    // CN mode with API key: use Gaode geocoding (returns GCJ-02, consistent with map tiles)
+    if (cnMode && gaodeApiKey) {
+        try {
+            const url = 'https://restapi.amap.com/v3/geocode/geo?address='
+                + encodeURIComponent(input) + '&key=' + gaodeApiKey + '&output=json';
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status === '1' && data.geocodes && data.geocodes.length > 0) {
+                const parts = data.geocodes[0].location.split(',');
+                const x = parseFloat(parts[0]); // lng GCJ-02
+                const y = parseFloat(parts[1]); // lat GCJ-02
+                if (!marker) {
+                    marker = L.marker([y, x], { draggable: true }).addTo(map);
+                    marker.on('dragend', handleMarkerDragEnd);
+                    marker.on('contextmenu', handleMarkerRightClick);
+                } else {
+                    marker.setLatLng([y, x]);
+                }
+                map.setView([y, x], 13);
+                setCoordinates(y, x); // setCoordinates will convert GCJ-02 → WGS-84 internally
+            } else {
+                alert('未找到该地点，请确认输入内容或检查高德 API Key');
+            }
+        } catch (error) {
+            console.error('高德地理编码错误:', error);
+        }
+        return;
+    }
+
+    // Default: OSM Nominatim (WGS-84, for non-CN mode)
     var provider = new GeoSearch.OpenStreetMapProvider();
     try {
         const results = await provider.search({ query: input });
@@ -2486,6 +2677,14 @@ function continueAfterDeveloperModeRequired() {
 
     document.addEventListener('DOMContentLoaded', function () {
     console.log("test");
+
+    // Initialize CN mode UI state
+    document.getElementById('cnModeSwitch').checked = cnMode;
+    if (gaodeApiKey) {
+        document.getElementById('gaodeApiKeyInput').value = gaodeApiKey;
+    }
+    updateCnKeyBadge();
+
     initializeMap();
     searchLocation();
     handleFuelTypeChange();
@@ -2545,14 +2744,20 @@ function continueAfterDeveloperModeRequired() {
         </div>
     </div>
 
-    <!-- Centered Buy Me A Coffee button -->
+    <!-- Donation button -->
     <div class="row justify-content-center">
-        <div class="col-6 text-center"> <!-- Adjust the column size and add text-center class -->
-            <!-- Your Buy Me A Coffee button code -->
+        <div class="col-6 text-center">
             <p></p>
+            {% if cn_mode %}
+            <button type="button" class="btn btn-warning fw-semibold"
+                    data-bs-toggle="modal" data-bs-target="#donateModal">
+                ☕ 请我喝杯咖啡
+            </button>
+            {% else %}
             <a href="https://www.buymeacoffee.com/davesc63">
                 <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20beer&emoji=🍺&slug=davesc63&button_colour=FFDD00&font_colour=000000&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a beer">
             </a>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -2712,6 +2917,97 @@ Feedback? Please see the <a href="https://www.surveymonkey.com/r/5LJR2M5" target
 
 
 
+
+<!-- Donate QR Code Modal (CN mode only) -->
+<div class="modal fade" id="donateModal" tabindex="-1" aria-labelledby="donateModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="donateModalLabel">☕ 请我喝杯咖啡</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center">
+                <p class="text-muted small mb-3">感谢你的支持！扫描下方二维码即可打赏 ❤️</p>
+                <img src="/local-images/PayQrcode.png" alt="支付宝 / 微信收款码"
+                     class="img-fluid rounded" style="max-width:260px;">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CN Mode Settings Modal -->
+<div class="modal fade" id="cnSettingsModal" tabindex="-1" aria-labelledby="cnSettingsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="cnSettingsModalLabel">🇨🇳 中国大陆模式设置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+
+                <!-- Mode description -->
+                <p class="text-muted small mb-3">
+                    开启后使用<strong>高德地图</strong>（国内可直接访问，无需翻墙）。
+                    坐标系偏移（GCJ-02 → WGS-84）由程序自动修正，发送给 iOS 设备的坐标始终准确，无需手动换算。
+                </p>
+
+                <hr>
+
+                <!-- API Key guide -->
+                <p class="fw-semibold mb-2">如何申请高德 Web 服务 API Key（免费）</p>
+                <ol class="small text-muted ps-3 mb-3">
+                    <li class="mb-1">
+                        访问 <a href="https://lbs.amap.com" target="_blank">lbs.amap.com</a>，点击右上角「<strong>登录</strong>」，使用手机号注册并登录账号。
+                    </li>
+                    <li class="mb-1">
+                        登录后点击右上角头像 → 「<strong>进入控制台</strong>」，或直接访问
+                        <a href="https://console.amap.com" target="_blank">console.amap.com</a>。
+                    </li>
+                    <li class="mb-1">
+                        左侧菜单选「<strong>应用管理</strong>」→「<strong>我的应用</strong>」→ 点击「<strong>创建新应用</strong>」，填写应用名称（随意）后确认。
+                    </li>
+                    <li class="mb-1">
+                        在刚创建的应用右侧点「<strong>添加 Key</strong>」：
+                        <ul class="mt-1">
+                            <li>Key 名称：随意填写</li>
+                            <li><strong>服务平台：选「Web 服务」</strong>（注意：不是「Web 端(JS API)」）</li>
+                            <li>IP 白名单：留空（个人使用无需限制）</li>
+                        </ul>
+                    </li>
+                    <li class="mb-1">
+                        点「提交」后，复制生成的 32 位 Key 字符串，粘贴至下方输入框并保存。
+                    </li>
+                </ol>
+                <p class="small text-muted">
+                    免费额度：地理编码 <strong>30 万次/天</strong>，个人日常使用完全足够。
+                </p>
+
+                <hr>
+
+                <!-- Key input -->
+                <div class="mb-3">
+                    <label for="gaodeApiKeyInput" class="form-label fw-semibold">粘贴您的 API Key</label>
+                    <div class="input-group">
+                        <input type="password" class="form-control font-monospace" id="gaodeApiKeyInput"
+                               placeholder="32 位字母数字组合，例如：a1b2c3d4e5f6...">
+                        <button class="btn btn-outline-secondary" type="button" onclick="toggleApiKeyVisibility()" title="显示/隐藏">
+                            <i class="fa fa-eye" id="keyVisibilityIcon"></i>
+                        </button>
+                    </div>
+                    <div class="form-text">
+                        Key 仅保存在<strong>本机浏览器 localStorage</strong> 中，不会写入代码或上传至任何服务器。
+                    </div>
+                </div>
+                <div id="cnModalKeyStatus" class="mt-2"></div>
+
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveCnSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">

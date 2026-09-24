@@ -1,0 +1,159 @@
+name: Build GeoPort4CN
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ─── macOS ARM (Apple Silicon) ──────────────────────────────────────────────
+  build-macos-arm:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build .app bundle
+        run: |
+          pyinstaller \
+            --name "GeoPort4CN" \
+            --windowed \
+            --onedir \
+            --add-data "src/templates:templates" \
+            --add-data "images:images" \
+            --collect-all pymobiledevice3 \
+            --collect-all pycountry \
+            src/main.py
+
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          mkdir -p dist/dmg_staging
+          cp -r dist/GeoPort4CN.app dist/dmg_staging/
+          create-dmg \
+            --volname "GeoPort4CN" \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --app-drop-link 440 200 \
+            dist/GeoPort4CN-macOS-arm64.dmg \
+            dist/dmg_staging/ \
+          || (cd dist && zip -r GeoPort4CN-macOS-arm64.zip GeoPort4CN.app)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeoPort4CN-macOS-arm64
+          path: dist/GeoPort4CN-macOS-arm64.*
+
+  # ─── macOS Intel ────────────────────────────────────────────────────────────
+  build-macos-intel:
+    name: macOS (Intel)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build .app bundle
+        run: |
+          pyinstaller \
+            --name "GeoPort4CN" \
+            --windowed \
+            --onedir \
+            --add-data "src/templates:templates" \
+            --add-data "images:images" \
+            --collect-all pymobiledevice3 \
+            --collect-all pycountry \
+            src/main.py
+
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          mkdir -p dist/dmg_staging
+          cp -r dist/GeoPort4CN.app dist/dmg_staging/
+          create-dmg \
+            --volname "GeoPort4CN" \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --app-drop-link 440 200 \
+            dist/GeoPort4CN-macOS-x64.dmg \
+            dist/dmg_staging/ \
+          || (cd dist && zip -r GeoPort4CN-macOS-x64.zip GeoPort4CN.app)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeoPort4CN-macOS-x64
+          path: dist/GeoPort4CN-macOS-x64.*
+
+  # ─── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller pyuac pywin32
+
+      - name: Build executable
+        shell: bash
+        run: |
+          pyinstaller \
+            --name "GeoPort4CN" \
+            --onedir \
+            --uac-admin \
+            --add-data "src/templates;templates" \
+            --add-data "images;images" \
+            --collect-all pymobiledevice3 \
+            --collect-all pycountry \
+            src/main.py
+
+      - name: Package as zip
+        run: Compress-Archive -Path dist\GeoPort4CN -DestinationPath dist\GeoPort4CN-Windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeoPort4CN-Windows-x64
+          path: dist\GeoPort4CN-Windows-x64.zip
+
+  # ─── GitHub Release (only on version tags) ──────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build-macos-arm, build-macos-intel, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

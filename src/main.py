@@ -1,9 +1,11 @@
+import json
 import locale
 import os
 import re
 import sys
 import time
-import pyuac
+if sys.platform == 'win32':
+    import pyuac
 import psutil
 import signal
 import socket
@@ -16,7 +18,7 @@ import webbrowser
 import subprocess
 import pycountry
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from urllib3.exceptions import InsecureRequestWarning, ConnectionError
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 from contextlib import asynccontextmanager
@@ -36,12 +38,9 @@ from pymobiledevice3.osu.os_utils import get_os_utils
 from pymobiledevice3.bonjour import DEFAULT_BONJOUR_TIMEOUT, browse_mobdev2
 from pymobiledevice3.pair_records import get_local_pairing_record, get_remote_pairing_record_filename, get_preferred_pair_record
 from pymobiledevice3.common import get_home_folder
-from pymobiledevice3.cli.remote import cli_install_wetest_drivers
+if sys.platform == 'win32':
+    from pymobiledevice3.cli.remote import cli_install_wetest_drivers
 
-from pymobiledevice3.cli.remote import tunnel_task
-from pymobiledevice3.lockdown import LockdownClient
-from pymobiledevice3.lockdown_service_provider import LockdownServiceProvider
-from pymobiledevice3.remote.common import TunnelProtocol
 
 #========= Arg Parser ========
 # Parse command-line arguments
@@ -105,7 +104,7 @@ captured_output = None
 GITHUB_REPO = 'davesc63/GeoPort'
 CURRENT_VERSION_FILE = 'CURRENT_VERSION'
 BROADCAST_FILE = 'BROADCAST'
-APP_VERSION_NUMBER = "2.3.3"
+APP_VERSION_NUMBER = "4.0.2"
 APP_VERSION_TYPE = "fuel"
 terminate_tunnel_thread = False
 terminate_location_thread = False
@@ -370,24 +369,81 @@ def get_user_country():
 
 
 def get_country_from_ip():
+    # Try a domestic-accessible service first (works without VPN in mainland China)
     try:
-        response = requests.get("http://ip-api.com/json/")
+        import json as _json
+        resp = requests.get(
+            "https://whois.pconline.com.cn/ipJson.jsp?json=true",
+            timeout=3, verify=False
+        )
+        if resp.status_code == 200:
+            text = resp.content.decode('gbk', errors='ignore')
+            data = _json.loads(text)
+            if data.get("pro"):
+                logger.info("Mainland China IP detected via pconline")
+                return "China"
+    except Exception as e:
+        logger.warning(f"Domestic IP check skipped: {e}")
+
+    # Fall back to ip-api.com
+    try:
+        response = requests.get("http://ip-api.com/json/", timeout=5)
         if response.status_code == 200:
             data = response.json()
             country_name = data.get("country")
             if country_name:
                 return country_name
-            else:
-                logger.warning("Failed to retrieve country name from IP geolocation service.")
+            logger.warning("Failed to retrieve country name from ip-api.com")
         else:
-            logger.error(f"Error: Unable to retrieve data. Status code: {response.status_code}")
-            logger.warning("Setting to default country")
-            country_name = "Spain"
-        return country_name
+            logger.error(f"ip-api.com status: {response.status_code}")
     except Exception as e:
-        logger.error(f"Error getting country from IP geolocation service: {e}")
-        country_name = "Spain"
-        return country_name
+        logger.error(f"Error getting country from IP: {e}")
+
+    return "Spain"
+
+
+def is_china_user():
+    country = get_country_from_ip()
+    return country is not None and 'China' in country
+
+
+# ── Persistent settings (saved to ~/GeoPort/settings.json) ──────────────────
+SETTINGS_FILE = os.path.join(home_dir, 'GeoPort', 'settings.json')
+
+def load_app_settings():
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not load settings: {e}")
+    return {}
+
+def save_app_settings(data):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        settings = load_app_settings()
+        settings.update(data)
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save settings: {e}")
+
+
+@app.route('/save_settings', methods=['POST'])
+def save_settings_route():
+    data = request.get_json()
+    save_app_settings(data)
+    return jsonify({'success': True})
+
+
+@app.route('/local-images/<path:filename>')
+def serve_local_image(filename):
+    if getattr(sys, 'frozen', False):
+        images_dir = os.path.join(sys._MEIPASS, 'images')
+    else:
+        images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'images')
+    return send_from_directory(images_dir, filename)
 def get_devices_with_retry(max_attempts=10):
     if sys.platform == 'win32':
         logger.info(f"iOS Version: {ios_version}")
@@ -1380,33 +1436,41 @@ def exit_app():
 
 @app.route('/')
 def index():
-    # global error_message
-    fetch_api_data(api_url)
-    # Get the GitHub version
-    github_version = get_github_version()
-    github_broadcast = get_github_broadcast()
+    settings = load_app_settings()
+
+    # CN mode: user saved preference wins over IP detection
+    saved_cn = settings.get('cn_mode')
+    cn_mode = saved_cn if saved_cn is not None else is_china_user()
+    logger.info(f"CN Mode: {cn_mode}")
+
+    # Skip GitHub/overseas requests in CN mode (blocked by GFW, would cause slow timeouts)
+    if cn_mode:
+        github_version = None
+        github_broadcast = None
+    else:
+        fetch_api_data(api_url)
+        github_version = get_github_version()
+        github_broadcast = get_github_broadcast()
+
     user_locale = get_user_country()
     logger.info(f"Country: {user_locale}")
     logger.info(f"Current platform: {platform}")
     logger.info(f"App Version = {APP_VERSION_NUMBER}")
-    logger.info(f"base dir =  {base_directory}")
     logger.info(f"GitHub Version = {github_version}")
 
-    #list_devices()
-    # Compare with the locally hardcoded version
     if github_version and github_version > APP_VERSION_NUMBER:
         version_message = f"Update available. New Version is {github_version}"
-
     elif github_version and github_version < APP_VERSION_NUMBER:
         version_message = f"Beta Testing. App version is {APP_VERSION_NUMBER} - github is {github_version}"
-
     else:
         version_message = None
+
+    saved_api_key = settings.get('gaode_api_key', '')
 
     return render_template('map.html', version_message=version_message, github_broadcast=github_broadcast,
                            user_locale=user_locale, app_version_num=APP_VERSION_NUMBER,
                            app_version_type=APP_VERSION_TYPE, error_message=error_message, current_platform=platform,
-                           sudo_message=sudo_message)
+                           sudo_message=sudo_message, cn_mode=cn_mode, gaode_api_key=saved_api_key)
 
 
 def open_browser():
@@ -1468,14 +1532,10 @@ if __name__ == '__main__':
 
     # Check if --no-browser flag is provided
     if not args.no_browser:
-        open_browser()
+        threading.Thread(target=open_browser, daemon=True).start()
     else:
         logger.info("--no-browser flag passed")
         logger.info("Running without auto-browser popup")
-
-
-
-    #threading.Thread(target=open_browser).start()
 
     app.run(debug=True, use_reloader=False, port=chosen_port, host='0.0.0.0')
 
