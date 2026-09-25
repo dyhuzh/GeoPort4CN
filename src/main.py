@@ -77,8 +77,22 @@ logging.getLogger('werkzeug').disabled = True
 app = Flask(__name__)
 
 # Define constants
-# Get the home directory of the current user
-home_dir = os.path.expanduser("~")
+# Get the home directory of the current user.
+# When launched with sudo (required on macOS for iOS 17/18), expanduser("~")
+# resolves to root's home (/var/root), which hides the user's saved settings
+# (e.g. the Gaode API key in ~/GeoPort/settings.json). Fall back to the
+# invoking user's home via SUDO_USER so settings persist for the real user.
+def _resolve_home_dir():
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user and sys.platform != 'win32':
+        try:
+            import pwd
+            return pwd.getpwnam(sudo_user).pw_dir
+        except Exception:
+            pass
+    return os.path.expanduser("~")
+
+home_dir = _resolve_home_dir()
 is_windows = sys.platform == 'win32'
 base_directory = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(sys.argv[0])))
 flask_port = 54321

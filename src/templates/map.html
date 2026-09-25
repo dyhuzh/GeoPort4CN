@@ -685,6 +685,21 @@ function gcj02ToWgs84(lng, lat) {
     dlng = (dlng * 180.0) / (a / sqrtmagic * Math.cos(radlat) * Math.PI);
     return [lng - dlng, lat - dlat];
 }
+// ---- WGS-84 (GPS) → GCJ-02 (火星) conversion ----
+// Used to place WGS-84 search results (e.g. OSM) correctly on GCJ-02 map tiles.
+function wgs84ToGcj02(lng, lat) {
+    if (_outOfChina(lng, lat)) return [lng, lat];
+    var a = 6378245.0, ee = 0.00669342162296594323;
+    var dlat = _transformLat(lng - 105.0, lat - 35.0);
+    var dlng = _transformLng(lng - 105.0, lat - 35.0);
+    var radlat = lat / 180.0 * Math.PI;
+    var magic = Math.sin(radlat);
+    magic = 1 - ee * magic * magic;
+    var sqrtmagic = Math.sqrt(magic);
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * Math.PI);
+    dlng = (dlng * 180.0) / (a / sqrtmagic * Math.cos(radlat) * Math.PI);
+    return [lng + dlng, lat + dlat];
+}
 
 // ---- CN mode UI helpers ----
 function updateCnKeyBadge() {
@@ -1637,17 +1652,25 @@ async function searchLocation(input, userLocale) {
     try {
         const results = await provider.search({ query: input });
         if (results.length > 0) {
-            const { x, y } = results[0];
+            // OSM returns WGS-84. In CN mode the tiles are GCJ-02, so convert
+            // to GCJ-02 for display; setCoordinates() then converts back to
+            // WGS-84 before sending to the device.
+            let mx = results[0].x, my = results[0].y;
+            if (cnMode) {
+                const g = wgs84ToGcj02(mx, my);
+                mx = g[0];
+                my = g[1];
+            }
             if (!marker) {
-                marker = L.marker([y, x], { draggable: true }).addTo(map);
+                marker = L.marker([my, mx], { draggable: true }).addTo(map);
                 marker.on('dragend', handleMarkerDragEnd); // Add event listener for marker drag
                 marker.on('contextmenu', handleMarkerRightClick); // Add event listener for marker right-click
 
             } else {
-                marker.setLatLng([y, x]);
+                marker.setLatLng([my, mx]);
             }
-            map.setView([y, x], 13);
-            setCoordinates(y, x);
+            map.setView([my, mx], 13);
+            setCoordinates(my, mx);
         } else {
             alert("No results found for the provided location");
         }
