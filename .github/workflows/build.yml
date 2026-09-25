@@ -31,9 +31,9 @@ jobs:
             --windowed \
             --onedir \
             --add-data "src/templates:templates" \
-            --add-data "images:images" \
+            --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
-            --collect-all pycountry \
+            --collect-data pycountry \
             src/main.py
 
       - name: Create DMG
@@ -78,9 +78,9 @@ jobs:
             --windowed \
             --onedir \
             --add-data "src/templates:templates" \
-            --add-data "images:images" \
+            --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
-            --collect-all pycountry \
+            --collect-data pycountry \
             src/main.py
 
       - name: Create DMG
@@ -125,9 +125,9 @@ jobs:
             --onedir \
             --uac-admin \
             --add-data "src/templates;templates" \
-            --add-data "images;images" \
+            --add-data "images/PayQrcode.png;images" \
             --collect-all pymobiledevice3 \
-            --collect-all pycountry \
+            --collect-data pycountry \
             src/main.py
 
       - name: Package as zip
