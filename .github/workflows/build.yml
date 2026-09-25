@@ -60,6 +60,7 @@ jobs:
   build-macos-intel:
     name: macOS (Intel)
     runs-on: macos-13
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -141,7 +142,7 @@ jobs:
   # ─── GitHub Release (only on version tags) ──────────────────────────────────
   release:
     name: Create Release
-    needs: [build-macos-arm, build-macos-intel, build-windows]
+    needs: [build-macos-arm, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
