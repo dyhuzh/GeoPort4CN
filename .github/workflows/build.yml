@@ -24,16 +24,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
+      - name: Create .icns icon
+        run: |
+          mkdir -p AppIcon.iconset
+          for size in 16 32 64 128 256 512 1024; do
+            sips -z $size $size images/AppIcon.png --out AppIcon.iconset/icon_${size}x${size}.png
+          done
+          iconutil -c icns AppIcon.iconset -o GeoPort4CN.icns
+
       - name: Build .app bundle
         run: |
           pyinstaller \
             --name "GeoPort4CN" \
+            --onefile \
             --windowed \
-            --onedir \
+            --icon GeoPort4CN.icns \
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata readchar \
+            --copy-metadata inquirer3 \
             src/main.py
 
       - name: Create DMG
@@ -71,16 +82,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
+      - name: Create .icns icon
+        run: |
+          mkdir -p AppIcon.iconset
+          for size in 16 32 64 128 256 512 1024; do
+            sips -z $size $size images/AppIcon.png --out AppIcon.iconset/icon_${size}x${size}.png
+          done
+          iconutil -c icns AppIcon.iconset -o GeoPort4CN.icns
+
       - name: Build .app bundle
         run: |
           pyinstaller \
             --name "GeoPort4CN" \
+            --onefile \
             --windowed \
-            --onedir \
+            --icon GeoPort4CN.icns \
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata readchar \
+            --copy-metadata inquirer3 \
             src/main.py
 
       - name: Create DMG
@@ -115,29 +137,38 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pyinstaller pyuac pywin32
+        run: pip install -r requirements.txt pyinstaller pyuac pywin32 Pillow
+
+      - name: Create .ico icon
+        run: |
+          python -c "
+          from PIL import Image
+          img = Image.open('images/AppIcon.png').convert('RGBA')
+          sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]
+          img.save('GeoPort4CN.ico', format='ICO', sizes=sizes)
+          "
 
       - name: Build executable
         shell: bash
         run: |
           pyinstaller \
             --name "GeoPort4CN" \
-            --onedir \
+            --onefile \
             --uac-admin \
+            --icon GeoPort4CN.ico \
             --add-data "src/templates;templates" \
             --add-data "images/PayQrcode.png;images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata readchar \
+            --copy-metadata inquirer3 \
             src/main.py
-
-      - name: Package as zip
-        run: Compress-Archive -Path dist\GeoPort4CN -DestinationPath dist\GeoPort4CN-Windows-x64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GeoPort4CN-Windows-x64
-          path: dist\GeoPort4CN-Windows-x64.zip
+          path: dist\GeoPort4CN.exe
 
   # ─── GitHub Release (only on version tags) ──────────────────────────────────
   release:
