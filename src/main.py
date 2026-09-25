@@ -49,7 +49,7 @@ parser.add_argument('--no-browser', action='store_true', help='Skip auto opening
 parser.add_argument('--port', type=int, help='Specify port number to listen on for web browser requests')
 parser.add_argument('--wifihost', type=str, help='Specify the wifi IP address to connect to')
 parser.add_argument('--udid', type=str, help='Specify the device udid to target')
-args = parser.parse_args()
+args, _ = parser.parse_known_args()
 #========= Arg Parser ========
 
 if sys.platform == 'win32':
@@ -1510,6 +1510,8 @@ def try_bind_listener_on_free_port():
 
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
     #create_geoport_folder()
     if is_windows:
         try:

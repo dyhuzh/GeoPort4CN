@@ -24,27 +24,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
-      - name: Create .icns icon
-        run: |
-          mkdir -p AppIcon.iconset
-          for size in 16 32 64 128 256 512 1024; do
-            sips -z $size $size images/AppIcon.png --out AppIcon.iconset/icon_${size}x${size}.png
-          done
-          iconutil -c icns AppIcon.iconset -o GeoPort4CN.icns
-
       - name: Build .app bundle
         run: |
           pyinstaller \
             --name "GeoPort4CN" \
-            --onefile \
+            --onedir \
             --windowed \
-            --icon GeoPort4CN.icns \
+            --icon images/AppIcon.icns \
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata Flask \
+            --copy-metadata MarkupSafe \
+            --copy-metadata apple-compress \
+            --copy-metadata click \
+            --copy-metadata itsdangerous \
+            --copy-metadata pycountry \
+            --copy-metadata pyimg4 \
             --copy-metadata readchar \
-            --copy-metadata inquirer3 \
+            --copy-metadata sentry-sdk \
+            --copy-metadata urllib3 \
             src/main.py
 
       - name: Create DMG
@@ -82,27 +82,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
-      - name: Create .icns icon
-        run: |
-          mkdir -p AppIcon.iconset
-          for size in 16 32 64 128 256 512 1024; do
-            sips -z $size $size images/AppIcon.png --out AppIcon.iconset/icon_${size}x${size}.png
-          done
-          iconutil -c icns AppIcon.iconset -o GeoPort4CN.icns
-
       - name: Build .app bundle
         run: |
           pyinstaller \
             --name "GeoPort4CN" \
-            --onefile \
+            --onedir \
             --windowed \
-            --icon GeoPort4CN.icns \
+            --icon images/AppIcon.icns \
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata Flask \
+            --copy-metadata MarkupSafe \
+            --copy-metadata apple-compress \
+            --copy-metadata click \
+            --copy-metadata itsdangerous \
+            --copy-metadata pycountry \
+            --copy-metadata pyimg4 \
             --copy-metadata readchar \
-            --copy-metadata inquirer3 \
+            --copy-metadata sentry-sdk \
+            --copy-metadata urllib3 \
             src/main.py
 
       - name: Create DMG
@@ -160,8 +160,16 @@ jobs:
             --add-data "images/PayQrcode.png;images" \
             --collect-all pymobiledevice3 \
             --collect-data pycountry \
+            --copy-metadata Flask \
+            --copy-metadata MarkupSafe \
+            --copy-metadata apple-compress \
+            --copy-metadata click \
+            --copy-metadata itsdangerous \
+            --copy-metadata pycountry \
+            --copy-metadata pyimg4 \
             --copy-metadata readchar \
-            --copy-metadata inquirer3 \
+            --copy-metadata sentry-sdk \
+            --copy-metadata urllib3 \
             src/main.py
 
       - name: Upload artifact
