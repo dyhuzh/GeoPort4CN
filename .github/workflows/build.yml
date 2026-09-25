@@ -34,6 +34,7 @@ jobs:
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
+            --collect-all pytun_pmd3 \
             --collect-all asgiref \
             --collect-data pycountry \
             --copy-metadata Flask \
@@ -93,6 +94,7 @@ jobs:
             --add-data "src/templates:templates" \
             --add-data "images/PayQrcode.png:images" \
             --collect-all pymobiledevice3 \
+            --collect-all pytun_pmd3 \
             --collect-all asgiref \
             --collect-data pycountry \
             --copy-metadata Flask \
@@ -161,6 +163,7 @@ jobs:
             --add-data "src/templates;templates" \
             --add-data "images/PayQrcode.png;images" \
             --collect-all pymobiledevice3 \
+            --collect-all pytun_pmd3 \
             --collect-all asgiref \
             --collect-data pycountry \
             --copy-metadata Flask \
@@ -174,11 +177,15 @@ jobs:
             --copy-metadata urllib3 \
             src/main.py
 
+      - name: Rename executable for release
+        shell: bash
+        run: mv dist/GeoPort4CN.exe dist/GeoPort4CN-Windows-x64.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GeoPort4CN-Windows-x64
-          path: dist\GeoPort4CN.exe
+          path: dist\GeoPort4CN-Windows-x64.exe
 
   # ─── GitHub Release (only on version tags) ──────────────────────────────────
   release:
@@ -194,6 +201,13 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # Delete any existing release for this tag first so stale assets from
+      # earlier runs (e.g. old naming schemes) don't accumulate. Keep the tag.
+      - name: Delete existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag=false || true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
