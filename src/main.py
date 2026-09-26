@@ -39,7 +39,13 @@ from pymobiledevice3.bonjour import DEFAULT_BONJOUR_TIMEOUT, browse_mobdev2
 from pymobiledevice3.pair_records import get_local_pairing_record, get_remote_pairing_record_filename, get_preferred_pair_record
 from pymobiledevice3.common import get_home_folder
 if sys.platform == 'win32':
-    from pymobiledevice3.cli.remote import cli_install_wetest_drivers
+    # Only present in some pymobiledevice3 versions; used for the WeTest driver
+    # install needed by iOS 17.0-17.3.1 on Windows. Guard so a missing symbol
+    # doesn't crash startup on other versions (e.g. 4.14.16).
+    try:
+        from pymobiledevice3.cli.remote import cli_install_wetest_drivers
+    except ImportError:
+        cli_install_wetest_drivers = None
 
 
 #========= Arg Parser ========
@@ -463,7 +469,13 @@ def get_devices_with_retry(max_attempts=10):
         logger.info(f"iOS Version: {ios_version}")
         if version_check(ios_version):
             logger.info("Windows Driver Install Required")
-            cli_install_wetest_drivers()
+            if cli_install_wetest_drivers is not None:
+                cli_install_wetest_drivers()
+            else:
+                logger.warning("cli_install_wetest_drivers unavailable in this "
+                               "pymobiledevice3 version; skipping WeTest driver "
+                               "install. iOS 17.0-17.3.1 on Windows may need the "
+                               "driver installed manually.")
     for attempt in range(1, max_attempts + 1):
         try:
             devices = asyncio.run(get_rsds(timeout))
@@ -1523,6 +1535,58 @@ def try_bind_listener_on_free_port():
     return chosen_port
 
 
+GEOPORT_ROOT_LOG = '/tmp/geoport4cn-root.log'
+
+def relaunch_as_root_macos():
+    """Relaunch the server with admin privileges via a GUI password prompt.
+
+    iOS 17/18 tunneling requires root. This lets users just double-click the
+    app instead of running `sudo` from a terminal.
+
+    The elevated server runs in the FOREGROUND under osascript (blocking) — we
+    deliberately avoid backgrounding/fork(): a PyInstaller --windowed bundle has
+    initialised Cocoa, which is not fork-safe, so double-fork daemonisation
+    crashes. Instead we start osascript with start_new_session=True so it lives
+    in its own session; when this (unprivileged) launcher exits, osascript is
+    re-parented to launchd and keeps the root server alive. This launcher just
+    waits for the port, opens the browser as the current user, then exits.
+
+    If the user cancels the prompt we return, so the caller continues
+    unprivileged (the map still works; location simulation won't until root)."""
+    exe = sys.executable
+    inner = "'%s' --no-browser >%s 2>&1" % (exe, GEOPORT_ROOT_LOG)
+    osa = 'do shell script "%s" with administrator privileges' % inner
+    try:
+        proc = subprocess.Popen(['osascript', '-e', osa],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True)
+    except Exception as e:
+        logger.warning(f"Admin elevation error: {e}; continuing without root")
+        return
+
+    # Wait for the elevated server to bind (up to ~90s to allow password entry),
+    # or bail out if the user cancels the prompt.
+    port_up = False
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if proc.poll() is not None and proc.returncode != 0:
+            logger.warning("Admin elevation cancelled or failed; continuing "
+                           "without root. iOS 17/18 location simulation won't work.")
+            return
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            if s.connect_ex(('127.0.0.1', flask_port)) == 0:
+                port_up = True
+                break
+        time.sleep(1)
+
+    if not port_up:
+        logger.warning(f"Elevated server did not come up; see {GEOPORT_ROOT_LOG}")
+    if not args.no_browser:
+        webbrowser.open(f'http://localhost:{flask_port}')
+    sys.exit(0)
+
+
 if __name__ == '__main__':
     import multiprocessing
     multiprocessing.freeze_support()
@@ -1539,6 +1603,9 @@ if __name__ == '__main__':
         if not pyuac.isUserAdmin():
             print("Relaunching as Admin")
             pyuac.runAsAdmin()
+    elif current_platform == 'darwin' and os.geteuid() != 0 and getattr(sys, 'frozen', False):
+        logger.info("Not running as root; requesting admin privileges via prompt")
+        relaunch_as_root_macos()
     #else:
 
 
