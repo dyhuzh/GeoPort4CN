@@ -105,14 +105,21 @@ jobs:
       - name: Create x86_64 venv and install dependencies
         run: |
           arch -x86_64 /usr/local/bin/python3.12 -m venv venv
+          # Always drive pip/pyinstaller via `python -m` so the x86_64 preference
+          # applies to the interpreter binary. Invoking the pip/pyinstaller *script*
+          # under `arch -x86_64` doesn't work: the kernel re-execs the shebang
+          # interpreter without the arch preference, so it runs native arm64 and
+          # installs arm64 wheels (e.g. cryptography's _rust.abi3.so).
           arch -x86_64 ./venv/bin/python -m pip install --upgrade pip
-          arch -x86_64 ./venv/bin/pip install -r requirements.txt pyinstaller
+          arch -x86_64 ./venv/bin/python -m pip install -r requirements.txt pyinstaller
           echo "Interpreter arch:"
           arch -x86_64 ./venv/bin/python -c "import platform; print(platform.machine())"
+          echo "cryptography _rust arch:"
+          file ./venv/lib/python3.12/site-packages/cryptography/hazmat/bindings/_rust.abi3.so
 
       - name: Build .app bundle (x86_64)
         run: |
-          arch -x86_64 ./venv/bin/pyinstaller \
+          arch -x86_64 ./venv/bin/python -m PyInstaller \
             --name "GeoPort4CN" \
             --onedir \
             --windowed \
