@@ -79,23 +79,40 @@ jobs:
           path: dist/GeoPort4CN-macOS-arm64.*
 
   # ─── macOS Intel ────────────────────────────────────────────────────────────
+  # Cross-build x86_64 on an Apple Silicon runner via Rosetta 2 (the native
+  # macos-13 Intel runners queue indefinitely for this repo). Uses the python.org
+  # universal2 build, whose x86_64 slice targets macOS 10.13+, so the result runs
+  # on Intel Macs back to Big Sur and earlier.
   build-macos-intel:
     name: macOS (Intel)
-    runs-on: macos-13
+    runs-on: macos-latest
     continue-on-error: true
+    env:
+      PY_VER: 3.12.7
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Install Rosetta 2
+        run: softwareupdate --install-rosetta --agree-to-license
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt pyinstaller
-
-      - name: Build .app bundle
+      - name: Install x86_64 Python (python.org universal2)
         run: |
-          pyinstaller \
+          curl -fL -o /tmp/python.pkg \
+            "https://www.python.org/ftp/python/${PY_VER}/python-${PY_VER}-macos11.pkg"
+          sudo installer -pkg /tmp/python.pkg -target /
+          ls -l /usr/local/bin/python3.12
+
+      - name: Create x86_64 venv and install dependencies
+        run: |
+          arch -x86_64 /usr/local/bin/python3.12 -m venv venv
+          arch -x86_64 ./venv/bin/python -m pip install --upgrade pip
+          arch -x86_64 ./venv/bin/pip install -r requirements.txt pyinstaller
+          echo "Interpreter arch:"
+          arch -x86_64 ./venv/bin/python -c "import platform; print(platform.machine())"
+
+      - name: Build .app bundle (x86_64)
+        run: |
+          arch -x86_64 ./venv/bin/pyinstaller \
             --name "GeoPort4CN" \
             --onedir \
             --windowed \
@@ -117,6 +134,8 @@ jobs:
             --copy-metadata sentry-sdk \
             --copy-metadata urllib3 \
             src/main.py
+          echo "Built binary arch:"
+          file dist/GeoPort4CN.app/Contents/MacOS/GeoPort4CN
 
       - name: Run as background agent (no Dock icon, avoids "Not Responding")
         run: |
