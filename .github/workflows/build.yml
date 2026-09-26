@@ -49,6 +49,15 @@ jobs:
             --copy-metadata urllib3 \
             src/main.py
 
+      - name: Run as background agent (no Dock icon, avoids "Not Responding")
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" dist/GeoPort4CN.app/Contents/Info.plist \
+            || /usr/libexec/PlistBuddy -c "Set :LSUIElement true" dist/GeoPort4CN.app/Contents/Info.plist
+          # Editing Info.plist invalidates PyInstaller's signature, which makes
+          # the app show as "damaged" on other Macs. Re-apply an ad-hoc signature.
+          codesign --force --deep --sign - dist/GeoPort4CN.app
+          codesign --verify --deep --strict dist/GeoPort4CN.app
+
       - name: Create DMG
         run: |
           brew install create-dmg
@@ -108,6 +117,15 @@ jobs:
             --copy-metadata sentry-sdk \
             --copy-metadata urllib3 \
             src/main.py
+
+      - name: Run as background agent (no Dock icon, avoids "Not Responding")
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" dist/GeoPort4CN.app/Contents/Info.plist \
+            || /usr/libexec/PlistBuddy -c "Set :LSUIElement true" dist/GeoPort4CN.app/Contents/Info.plist
+          # Editing Info.plist invalidates PyInstaller's signature, which makes
+          # the app show as "damaged" on other Macs. Re-apply an ad-hoc signature.
+          codesign --force --deep --sign - dist/GeoPort4CN.app
+          codesign --verify --deep --strict dist/GeoPort4CN.app
 
       - name: Create DMG
         run: |

@@ -1506,6 +1506,39 @@ def open_browser():
     browser.open(f'http://localhost:{chosen_port}')
 
 
+def free_port(port):
+    """Kill any process currently listening on `port` (a stale GeoPort server).
+
+    On macOS the elevated server runs detached and survives the GUI launcher, so
+    a previous session can keep holding the fixed port. Reclaiming it here gives
+    single-instance behaviour: no duplicate/zombie servers, and the launcher's
+    readiness check can't latch onto a stale server (which caused the browser to
+    open before the password prompt was answered)."""
+    try:
+        import psutil
+        # Requires root on macOS to see other processes' sockets; callers guard on
+        # euid == 0. Wrapped so a permission error can never crash startup.
+        conns = psutil.net_connections(kind='inet')
+    except Exception as e:
+        logger.warning(f"free_port: cannot enumerate connections ({e}); skipping")
+        return
+    me = os.getpid()
+    for conn in conns:
+        try:
+            if (conn.laddr and conn.laddr.port == port
+                    and conn.status == psutil.CONN_LISTEN
+                    and conn.pid and conn.pid != me):
+                p = psutil.Process(conn.pid)
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except Exception:
+                    p.kill()
+                logger.info(f"Freed port {port}: stopped stale server pid {conn.pid}")
+        except Exception:
+            continue
+
+
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
@@ -1548,12 +1581,19 @@ def relaunch_as_root_macos():
     initialised Cocoa, which is not fork-safe, so double-fork daemonisation
     crashes. Instead we start osascript with start_new_session=True so it lives
     in its own session; when this (unprivileged) launcher exits, osascript is
-    re-parented to launchd and keeps the root server alive. This launcher just
-    waits for the port, opens the browser as the current user, then exits.
+    re-parented to launchd and keeps the root server alive.
 
-    If the user cancels the prompt we return, so the caller continues
-    unprivileged (the map still works; location simulation won't until root)."""
+    To avoid racing a stale server (which made the browser open before the
+    password was entered), we delete the log first and wait for THIS elevated
+    server to write a fresh readiness marker into the freshly-recreated log —
+    only then do we open the browser. If the user cancels the prompt we return,
+    so the caller continues unprivileged (the map still works; location
+    simulation won't until run as root)."""
     exe = sys.executable
+    try:
+        os.remove(GEOPORT_ROOT_LOG)
+    except OSError:
+        pass
     inner = "'%s' --no-browser >%s 2>&1" % (exe, GEOPORT_ROOT_LOG)
     osa = 'do shell script "%s" with administrator privileges' % inner
     try:
@@ -1564,24 +1604,35 @@ def relaunch_as_root_macos():
         logger.warning(f"Admin elevation error: {e}; continuing without root")
         return
 
-    # Wait for the elevated server to bind (up to ~90s to allow password entry),
-    # or bail out if the user cancels the prompt.
-    port_up = False
-    deadline = time.time() + 90
+    # Wait (up to ~120s to allow password entry) for THIS server's fresh readiness
+    # marker in the recreated log, or bail out if the user cancels the prompt.
+    ready = False
+    deadline = time.time() + 120
     while time.time() < deadline:
         if proc.poll() is not None and proc.returncode != 0:
             logger.warning("Admin elevation cancelled or failed; continuing "
                            "without root. iOS 17/18 location simulation won't work.")
             return
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
-            if s.connect_ex(('127.0.0.1', flask_port)) == 0:
-                port_up = True
-                break
-        time.sleep(1)
+        try:
+            with open(GEOPORT_ROOT_LOG, 'r') as f:
+                if 'GEOPORT_SERVER_READY' in f.read():
+                    ready = True
+                    break
+        except OSError:
+            pass
+        time.sleep(0.5)
 
-    if not port_up:
-        logger.warning(f"Elevated server did not come up; see {GEOPORT_ROOT_LOG}")
+    # Marker is logged just before bind; confirm the port actually accepts
+    # connections before opening the browser.
+    if ready:
+        for _ in range(20):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                if s.connect_ex(('127.0.0.1', flask_port)) == 0:
+                    break
+            time.sleep(0.5)
+    else:
+        logger.warning(f"Elevated server did not report ready; see {GEOPORT_ROOT_LOG}")
     if not args.no_browser:
         webbrowser.open(f'http://localhost:{flask_port}')
     sys.exit(0)
@@ -1611,6 +1662,12 @@ if __name__ == '__main__':
 
 
 
+    # Single-instance: as root, reclaim the fixed port from any stale server so we
+    # don't leave zombie servers behind and the elevated launcher can't latch onto
+    # one. Only meaningful (and permitted) as root, which is the elevated path.
+    if current_platform == 'darwin' and os.geteuid() == 0:
+        free_port(flask_port)
+
     chosen_port = try_bind_listener_on_free_port()
 
     # Check if --no-browser flag is provided
@@ -1620,6 +1677,9 @@ if __name__ == '__main__':
         logger.info("--no-browser flag passed")
         logger.info("Running without auto-browser popup")
 
+    # Readiness marker: the elevated launcher waits for this line in the log
+    # before opening the browser (see relaunch_as_root_macos).
+    logger.info(f"GEOPORT_SERVER_READY on port {chosen_port}")
     app.run(debug=True, use_reloader=False, port=chosen_port, host='0.0.0.0')
 
 
