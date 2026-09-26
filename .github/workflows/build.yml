@@ -248,7 +248,7 @@ jobs:
   # ─── GitHub Release (only on version tags) ──────────────────────────────────
   release:
     name: Create Release
-    needs: [build-macos-arm, build-windows]
+    needs: [build-macos-arm, build-macos-intel, build-windows]
     runs-on: ubuntu-latest
     # always() so a single platform's build failure still publishes a release
     # with whatever artifacts did succeed, instead of blocking everything.
